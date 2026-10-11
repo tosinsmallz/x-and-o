@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>X and O</title>
+<!-- The Lagos Life SDK: always loaded from them, never a copy -->
+<script src="https://lagoslife.app/sdk/vatar-games-v1.js"></script>
+<style>
+  * { box-sizing: border-box }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; text-align: center;
+         font: 600 17px system-ui, sans-serif; background: #0f2a1d; color: #fff }
+  body.paused { opacity: .5 }
+  main { width: 100%; max-width: 375px; padding: 16px }
+  h1 { margin: 0 0 4px; font-size: 34px; letter-spacing: 2px }
+  h1 span { color: #f5c542 }
+  p { margin: 8px 0 }
+  button, input { font: inherit; border: 0; border-radius: 14px; padding: 14px 18px }
+  button { background: #1fa463; color: #fff; width: 100%; margin: 6px 0 }
+  button.quiet { background: #ffffff22 }
+  button:disabled { opacity: .5 }
+  .row { display: flex; gap: 8px }
+  .row input { flex: 1; min-width: 0; text-align: center; text-transform: uppercase; letter-spacing: 3px }
+  .row button { width: auto }
+  #code { font-size: 40px; letter-spacing: 6px; color: #f5c542 }
+  #board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0 }
+  #board button { aspect-ratio: 1; margin: 0; padding: 0; font-size: 56px; font-weight: 800; background: #ffffff18 }
+  #board button.O { color: #7fd6ff }
+  body.gold #board button { color: #f5c542; background: #f5c54222 }
+  ol { text-align: left; padding-left: 28px; font-weight: 400 }
+  #msg { min-height: 22px; color: #ffb4a8; font-weight: 400 }
+</style>
+</head>
+<body>
+<main>
+  <h1>X <span>and</span> O</h1>
+  <p id="hi">Loading…</p>
+
+  <section id="lobby" hidden>
+    <button id="create">Play a friend</button>
+    <button id="quick">Quick match</button>
+    <div class="row">
+      <input id="joincode" maxlength="6" placeholder="CODE" autocomplete="off">
+      <button id="join">Join</button>
+    </div>
+    <button id="gold" class="quiet">Gold marks · ₦100</button>
+    <p>Top players</p>
+    <ol id="top"></ol>
+  </section>
+
+  <section id="waiting" hidden>
+    <p>Share this code with a friend</p>
+    <p id="code"></p>
+    <p>Waiting for them to join…</p>
+    <button id="cancel" class="quiet">Cancel</button>
+  </section>
+
+  <section id="game" hidden>
+    <p id="status"></p>
+    <div id="board"></div>
+    <button id="again" hidden>Back to lobby</button>
+  </section>
+
+  <p id="msg"></p>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id)
+  let token = null, tokenAt = 0     // the session token proves to our server who is playing
+  let matchId = null, polling = false, paused = false, scored = false, last = null
+
+  const show = (name) => ["lobby", "waiting", "game"].forEach((id) => ($(id).hidden = id !== name))
+  const say = (text) => ($("msg").textContent = text || "")
+  const FRIENDLY = {
+    not_available: "Matches aren't switched on for this game yet.",
+    not_found: "No open match with that code.",
+    not_open: "That match is full or already over.",
+    rate_limited: "Slow down a little and try again.",
+    cancelled: "", owned: "You already own that.", signed_out: "Please sign in to Lagos Life first.",
+  }
+  const fail = (e) => say(e && e.code in FRIENDLY ? FRIENDLY[e.code] : "Something went wrong. Try again.")
+
+  // Session tokens last 15 minutes and the SDK allows 10 requests a minute, so we reuse one for 10 minutes.
+  async function session() {
+    if (!token || Date.now() - tokenAt > 10 * 60 * 1000) {
+      token = (await Vatar.session()).session
+      tokenAt = Date.now()
+    }
+    return token
+  }
+
+  // Every call to OUR server carries the session token.
+  async function server(path, data) {
+    const r = await fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: await session(), ...data }),
+    })
+    if (r.status === 401) token = null            // expired: fetch a fresh one next time
+    return { ok: r.ok, status: r.status, ...(await r.json().catch(() => ({}))) }
+  }
+
+  // ---- The board ----
+  for (let i = 0; i < 9; i++) {
+    const b = document.createElement("button")
+    b.onclick = async () => {
+      if (!last || last.over || last.turn !== last.you || last.board[i]) return
+      const s = await server("/api/move", { matchId, cell: i })
+      if (s.ok) render(s)
+    }
+    $("board").appendChild(b)
+  }
+
+  function render(s) {
+    last = s
+    ;[...$("board").children].forEach((b, i) => { b.textContent = s.board[i] || ""; b.className = s.board[i] || "" })
+    const other = s.names[s.you === "X" ? "O" : "X"]
+    if (!s.over) $("status").textContent = s.turn === s.you ? `Your turn (${s.you})` : `Waiting for ${other}…`
+    else if (s.winner === "draw") $("status").textContent = "It's a draw 🤝🏾"
+    else $("status").textContent = s.winner === s.you ? "You win! 🎉" : `${other} wins`
+    $("again").hidden = !s.over
+    if (s.over && s.winner === s.you && !scored) {
+      scored = true
+      Vatar.submitScore(s.wins).catch(() => {})   // the leaderboard keeps each player's best number
+    }
+  }
+
+  // Ask our server for the board once a second while a game is on.
+  async function poll() {
+    if (polling) return
+    polling = true
+    while (matchId && !(last && last.over && last.settled)) {
+      if (!paused) {
+        const s = await server("/api/state", { matchId }).catch(() => null)
+        if (s && s.ok) render(s)
+      }
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    polling = false
+  }
+
+  // ---- Matches: Lagos Life tells us whenever the match changes ----
+  function onMatch(m) {
+    if (!m) return show("lobby")
+    if (m.status === "open") { matchId = m.id; $("code").textContent = m.code; show("waiting") }
+    else if (m.status === "playing") { matchId = m.id; show("game"); poll() }
+    else if (m.status === "done") { if (matchId !== m.id) show("lobby") }
+    else { matchId = null; show("lobby"); say("That match was cancelled.") }
+  }
+
+  $("create").onclick = () => { say(); Vatar.match.create({ stake: 0, seats: 2 }).then(onMatch).catch(fail) }
+  $("quick").onclick = () => { say(); Vatar.match.quick({ stake: 0 }).then(onMatch).catch(fail) }
+  $("join").onclick = () => { say(); Vatar.match.join($("joincode").value.trim().toUpperCase()).then(onMatch).catch(fail) }
+  $("cancel").onclick = () => Vatar.match.leave().catch(() => {}).then(() => { matchId = null; show("lobby") })
+  $("again").onclick = () => { matchId = null; last = null; scored = false; say(); show("lobby"); loadTop() }
+
+  // ---- The one item for sale: gold marks ----
+  function setGold(on) {
+    document.body.classList.toggle("gold", on)
+    if (on) { $("gold").disabled = true; $("gold").textContent = "Gold marks ✓" }
+  }
+  // Our server checks every purchase with Lagos Life before giving anything.
+  async function claim(p) {
+    const r = await server("/api/claim", { purchaseId: p.purchaseId })
+    if (r.ok && r.productId === "gold_marks") setGold(true)
+  }
+  $("gold").onclick = () => { say(); Vatar.purchase("gold_marks").then(claim).catch(fail) }
+
+  function loadTop() {
+    Vatar.leaderboard().then(({ top }) => {
+      $("top").replaceChildren(...top.slice(0, 5).map((t) => {
+        const li = document.createElement("li")
+        li.textContent = `${t.name} · ${t.score} wins`
+        return li
+      }))
+    }).catch(() => {})
+  }
+
+  // ---- Start ----
+  Vatar.onPause(() => { paused = true; document.body.classList.add("paused") })
+  Vatar.onResume(() => { paused = false; document.body.classList.remove("paused") })
+
+  Vatar.init().then(async ({ player, session: first }) => {
+    token = first; tokenAt = Date.now()
+    $("hi").textContent = `Hi ${player.name} 👋🏾`
+    const mine = await server("/api/me")
+    setGold(Boolean(mine.gold))
+    Vatar.purchases().then((list) => list.forEach(claim)).catch(() => {})   // paid earlier, not delivered yet
+    Vatar.onPurchase(claim)                                                  // paid while the game was away
+    Vatar.match.onUpdate(onMatch)
+    onMatch(await Vatar.match.current().catch(() => null))                   // carry on a match already in progress
+    loadTop()
+  }).catch(() => { $("hi").textContent = "Open this game inside Lagos Life to play." })
+</script>
+</body>
+</html>
