@@ -11,9 +11,10 @@ import fs from "node:fs"
 // ---- Settings. The three secrets come from the hosting dashboard, never from this file. ----
 const ORIGIN = process.env.VATAR_ORIGIN || "https://lagoslife.app"
 const API_PATH = "/api/games/v1"
-const SECRET = process.env.VATAR_SECRET                  // vtr_test_... then vtr_live_...
-const RESULTS_SECRET = process.env.VATAR_RESULTS_SECRET  // signs match results
-const WEBHOOK_SECRET = process.env.VATAR_WEBHOOK_SECRET  // checks webhooks really came from Vatar
+// .trim() drops stray spaces or line breaks picked up when pasting a key into the dashboard.
+const SECRET = process.env.VATAR_SECRET?.trim()                  // vtr_test_... then vtr_live_...
+const RESULTS_SECRET = process.env.VATAR_RESULTS_SECRET?.trim()  // signs match results
+const WEBHOOK_SECRET = process.env.VATAR_WEBHOOK_SECRET?.trim()  // checks webhooks really came from Vatar
 const PORT = process.env.PORT || 8080
 const GOLD = "gold_marks"                                // the product id you create in the dashboard
 
@@ -99,7 +100,20 @@ async function settle(game) {
       { "X-Vatar-Timestamp": ts, "X-Vatar-Signature": sig })
     // 200 = settled. 409 = it was already settled or is over, so stop trying. Anything else: try again later.
     if (r.http === 200 || r.http === 409) game.settled = true
-    else console.log("settle failed, will retry:", r.http, r.error)
+    else {
+      console.log("settle failed, will retry:", r.http, r.error)
+      // Clues for fixing it. Never log the secret itself, only facts about it.
+      const raw = process.env.VATAR_RESULTS_SECRET || ""
+      console.log("settle check:", JSON.stringify({
+        resultsSecretSet: Boolean(RESULTS_SECRET),
+        resultsSecretLength: RESULTS_SECRET?.length || 0,
+        resultsSecretKind: RESULTS_SECRET?.match(/^[a-z]+_[a-z]+_/)?.[0] || "no vtr_..._ prefix",  // e.g. "vtr_whsec_", never the secret part
+        hadExtraSpaces: raw !== raw.trim(),
+        sameAsWebhookSecret: Boolean(RESULTS_SECRET) && RESULTS_SECRET === WEBHOOK_SECRET,
+        sameAsGameSecret: Boolean(RESULTS_SECRET) && RESULTS_SECRET === SECRET,
+        noncePresent: typeof game.nonce === "string" && game.nonce.length > 0,
+      }))
+    }
   } finally {
     game.settling = false
   }

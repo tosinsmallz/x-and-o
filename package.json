@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "X and O for Lagos Life",
   "type": "module",
-  "scripts": { "start": "node server.js" },
+  "scripts": { "start": "node server.js", "local": "node local.js" },
   "engines": { "node": ">=18" }
 }
