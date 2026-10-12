@@ -119,6 +119,12 @@ async function settle(game) {
   }
 }
 
+// Keep trying to post finished results, even after both players have gone back to the lobby.
+// Until a result is accepted, Lagos Life keeps the players in that match ("busy").
+setInterval(() => {
+  for (const game of games.values()) if (game.winner && !game.settled) settle(game).catch((e) => console.error(e))
+}, 30 * 1000)
+
 // What one player is allowed to see about the game.
 function view(game, me) {
   const mine = game.players.findIndex((p) => p.playerId === me.playerId)
