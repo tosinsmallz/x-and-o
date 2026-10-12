@@ -31,8 +31,8 @@ If a failed result ever happens again, server.js logs a "settle check:" line wit
 unsettled results every 30 seconds. While a result is unsettled, Lagos Life answers match calls with error `busy`.
 
 ## Known gaps before submitting for review
-- Database code is written and tested locally (wins, owned items, games, unsettled results survive restarts).
-  Still to do: create the Upstash database and add its two variables on Render; the log then says "database connected".
+- Database: done (11 Oct 2026). Upstash Redis "x-and-o", free tier, us-west-2 (Oregon, same as Render).
+  Render log shows "database connected". Wins, owned items, games and unsettled results survive restarts.
 - Free Render instances sleep when idle; review checks the game loads quickly on mobile data.
 - After "Back to lobby" while a match is still unsettled, new matches fail with `busy` until the server's retry succeeds.
 - Matches are friendlies only (`stake: 0`). Matches and stakes each need separate approval from the platform.
