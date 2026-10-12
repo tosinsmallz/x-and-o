@@ -13,7 +13,7 @@ The owner (Tosin) is not a developer: explain steps in plain language, one at a 
 
 ## Where things live
 - Docs: https://lagoslife.app/developers/docs
-- Dashboard: https://lagoslife.app/developers/dashboard (game "X and O", studio "Studio47", status Draft/sandbox)
+- Dashboard: https://lagoslife.app/developers/dashboard (game "X and O", studio "Studio47", status In review since 11 Oct 2026 19:40)
 - GitHub repo: tosinsmallz/x-and-o (branch main). Render auto-deploys from it.
 - Hosting: Render free web service, https://x-and-o-u492.onrender.com
 - Secrets are Render environment variables: VATAR_SECRET, VATAR_RESULTS_SECRET, VATAR_WEBHOOK_SECRET,
@@ -30,7 +30,12 @@ After correcting it, the checklist item "Multiplayer: a test match created, join
 If a failed result ever happens again, server.js logs a "settle check:" line with safe clues (never the secret), and retries
 unsettled results every 30 seconds. While a result is unsettled, Lagos Life answers match calls with error `busy`.
 
-## Known gaps before submitting for review
+## Notes
+- Submitted for review 11 Oct 2026. On the dashboard, "Save (takes it out of review)" withdraws it: don't save listing edits while in review.
+- Gold marks is cosmetic: the buyer's marks show gold on both players' boards.
+- Ads for outside businesses look disallowed (review rule: no "ads for paying anywhere else"); ask Lagos Life before building any.
+
+## Known gaps
 - Database: done (11 Oct 2026). Upstash Redis "x-and-o", free tier, us-west-2 (Oregon, same as Render).
   Render log shows "database connected". Wins, owned items, games and unsettled results survive restarts.
 - Keep-awake: done (11 Oct 2026). cron-job.org job "X and O keep awake" calls /health every 5 minutes so the free
