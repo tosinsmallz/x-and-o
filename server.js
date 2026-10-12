@@ -17,17 +17,58 @@ const RESULTS_SECRET = process.env.VATAR_RESULTS_SECRET?.trim()  // signs match 
 const WEBHOOK_SECRET = process.env.VATAR_WEBHOOK_SECRET?.trim()  // checks webhooks really came from Vatar
 const PORT = process.env.PORT || 8080
 const GOLD = "gold_marks"                                // the product id you create in the dashboard
+// The database (Upstash Redis). Without these two, everything lives in memory only and is lost on restart.
+const DB_URL = process.env.UPSTASH_REDIS_REST_URL?.trim()
+const DB_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN?.trim()
 
 const PAGE = fs.readFileSync(new URL("./index.html", import.meta.url))
 // This header lets Lagos Life show the game inside its frame (docs: Quick start, step 2).
 const FRAME = "frame-ancestors https://lagoslife.app https://www.lagoslife.app " +
   "https://naijalife.app https://www.naijalife.app https://lagoslife.eliysites.com"
 
-// ---- Memory. Fine for learning; it empties when the server restarts. Use a database before going live. ----
+// ---- Memory: a quick copy of what's in the database. Sessions are only kept here (they expire anyway). ----
 const sessions = new Map()   // session token -> who it belongs to (so we don't re-check every second)
 const games = new Map()      // match id -> the board and whose turn it is
 const owned = new Map()      // player id -> set of product ids they bought
 const wins = new Map()       // player id -> number of wins
+
+// ---- The database: one command per call, e.g. db("HGET", "wins", playerId). Returns null if there is no database. ----
+async function db(...command) {
+  if (!DB_URL) return null
+  const r = await fetch(DB_URL, { method: "POST", headers: { Authorization: `Bearer ${DB_TOKEN}` }, body: JSON.stringify(command) })
+  const out = await r.json().catch(() => ({ error: "HTTP " + r.status }))
+  if (out.error) throw new Error("database: " + out.error)
+  return out.result
+}
+
+// What's stored:  wins (player -> count)   owned:<player> (product ids)   game:<match id> (board, 2 days)
+//                 unsettled (match ids whose result Vatar hasn't accepted yet)
+async function getWins(playerId) {
+  if (!wins.has(playerId)) wins.set(playerId, Number(await db("HGET", "wins", playerId)) || 0)
+  return wins.get(playerId)
+}
+async function addWin(playerId) {
+  const n = await db("HINCRBY", "wins", playerId, 1)
+  wins.set(playerId, n ?? (wins.get(playerId) || 0) + 1)
+}
+async function owns(playerId, productId) {
+  if (owned.get(playerId)?.has(productId)) return true
+  if ((await db("SISMEMBER", "owned:" + playerId, productId)) !== 1) return false
+  if (!owned.has(playerId)) owned.set(playerId, new Set())
+  owned.get(playerId).add(productId)
+  return true
+}
+async function give(playerId, productId) {
+  await db("SADD", "owned:" + playerId, productId)   // saved first, so nothing is marked delivered unless it's stored
+  if (!owned.has(playerId)) owned.set(playerId, new Set())
+  owned.get(playerId).add(productId)
+}
+async function saveGame(game) {
+  const { settling, ...keep } = game
+  await db("SET", "game:" + game.id, JSON.stringify(keep), "EX", 2 * 24 * 60 * 60)
+  if (game.winner && !game.settled) await db("SADD", "unsettled", game.id)
+  if (game.settled) await db("SREM", "unsettled", game.id)
+}
 
 // ---- Calling the Vatar API: every call carries the secret as a Bearer token. ----
 async function vatar(method, path, body, extraHeaders = {}) {
@@ -56,22 +97,36 @@ async function whoIs(session) {
 const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]]
 const MARKS = ["X", "O"]
 
-function place(game, cell) {
+async function place(game, cell) {
   game.board[cell] = MARKS[game.turn]
   const line = LINES.find(([a, b, c]) => game.board[a] && game.board[a] === game.board[b] && game.board[a] === game.board[c])
   if (line) {
     game.winner = game.players[game.turn].playerId
-    wins.set(game.winner, (wins.get(game.winner) || 0) + 1)
   } else if (game.board.every(Boolean)) {
     game.winner = "draw"
   } else {
     game.turn = 1 - game.turn
   }
+  if (line) await addWin(game.winner)
+  await saveGame(game)
 }
 
-// Find the game for a match, or start one by asking Vatar who is in the match.
-async function loadGame(matchId) {
-  if (games.has(matchId)) return games.get(matchId)
+// Find the game for a match: in memory, then in the database, or start one by asking Vatar who is in the match.
+// Two requests arriving together for a new match share one lookup, so they can't end up with two different boards.
+const loading = new Map()
+function loadGame(matchId) {
+  if (games.has(matchId)) return Promise.resolve(games.get(matchId))
+  if (!loading.has(matchId)) loading.set(matchId, findGame(matchId).finally(() => loading.delete(matchId)))
+  return loading.get(matchId)
+}
+async function findGame(matchId) {
+  const saved = await db("GET", "game:" + matchId)
+  if (saved) {
+    const game = { ...JSON.parse(saved), settling: false }
+    for (const id in game.seen) game.seen[id] = Date.now()   // don't let the test bot jump in right after a restart
+    games.set(matchId, game)
+    return game
+  }
   const m = await vatar("GET", `/matches/${encodeURIComponent(matchId)}`)
   if (m.http !== 200 || m.status !== "playing" || !Array.isArray(m.players) || m.players.length !== 2) return null
   const now = Date.now()
@@ -82,6 +137,7 @@ async function loadGame(matchId) {
     seen: Object.fromEntries(m.players.map((p) => [p.playerId, now])),
   }
   games.set(matchId, game)
+  await saveGame(game)
   return game
 }
 
@@ -99,7 +155,7 @@ async function settle(game) {
     const r = await vatar("POST", `/matches/${encodeURIComponent(game.id)}/result`, body,
       { "X-Vatar-Timestamp": ts, "X-Vatar-Signature": sig })
     // 200 = settled. 409 = it was already settled or is over, so stop trying. Anything else: try again later.
-    if (r.http === 200 || r.http === 409) game.settled = true
+    if (r.http === 200 || r.http === 409) { game.settled = true; await saveGame(game) }
     else {
       console.log("settle failed, will retry:", r.http, r.error)
       // Clues for fixing it. Never log the secret itself, only facts about it.
@@ -125,8 +181,18 @@ setInterval(() => {
   for (const game of games.values()) if (game.winner && !game.settled) settle(game).catch((e) => console.error(e))
 }, 30 * 1000)
 
+// After a restart, pick up finished games whose result still needs posting.
+if (DB_URL) {
+  db("SMEMBERS", "unsettled")
+    .then((ids) => Promise.all((ids || []).map((id) => loadGame(id))))
+    .then((list) => console.log("database connected; results still to post:", list.filter(Boolean).length))
+    .catch((e) => console.error("database problem at start:", e.message))
+} else {
+  console.log("No database set (UPSTASH_REDIS_REST_URL): wins, purchases and games are kept in memory only.")
+}
+
 // What one player is allowed to see about the game.
-function view(game, me) {
+function view(game, me, myWins) {
   const mine = game.players.findIndex((p) => p.playerId === me.playerId)
   const winnerIdx = game.players.findIndex((p) => p.playerId === game.winner)
   return {
@@ -137,7 +203,7 @@ function view(game, me) {
     over: Boolean(game.winner),
     winner: game.winner === "draw" ? "draw" : winnerIdx >= 0 ? MARKS[winnerIdx] : null,
     settled: game.settled,
-    wins: wins.get(me.playerId) || 0,
+    wins: myWins,
   }
 }
 
@@ -187,7 +253,7 @@ http.createServer(async (req, res) => {
     if (!me) return send(res, 401, { error: "bad_session" })
 
     if (url === "/api/me") {
-      return send(res, 200, { gold: owned.get(me.playerId)?.has(GOLD) || false, wins: wins.get(me.playerId) || 0 })
+      return send(res, 200, { gold: await owns(me.playerId, GOLD), wins: await getWins(me.playerId) })
     }
 
     if (url === "/api/claim") {
@@ -195,8 +261,7 @@ http.createServer(async (req, res) => {
       const p = await vatar("GET", `/purchases/${encodeURIComponent(data.purchaseId)}`)   // is it real, and paid?
       if (p.http !== 200 || p.playerId !== me.playerId) return send(res, 403, { error: "not_yours" })
       if (p.status === "refunded") return send(res, 409, { error: "refunded" })
-      if (!owned.has(me.playerId)) owned.set(me.playerId, new Set())
-      owned.get(me.playerId).add(p.productId)                                           // give the item
+      await give(me.playerId, p.productId)                                              // give the item (saved)
       await vatar("POST", `/purchases/${encodeURIComponent(p.id)}/deliver`, "{}")       // mark delivered (safe to repeat)
       return send(res, 200, { ok: true, productId: p.productId })
     }
@@ -214,18 +279,18 @@ http.createServer(async (req, res) => {
         if (game.winner) return send(res, 409, { error: "game_over" })
         if (game.turn !== mine) return send(res, 409, { error: "not_your_turn" })
         if (!Number.isInteger(cell) || cell < 0 || cell > 8 || game.board[cell]) return send(res, 400, { error: "bad_move" })
-        place(game, cell)
+        await place(game, cell)
       } else if (game.mode === "test" && !game.winner && game.turn !== mine) {
         // Sandbox only: if the other seat is the test bot (it never calls us), play a random move for it.
         const other = game.players[game.turn].playerId
         if (Date.now() - game.seen[other] > 4000) {
           const free = game.board.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0)
-          place(game, free[Math.floor(Math.random() * free.length)])
+          await place(game, free[Math.floor(Math.random() * free.length)])
         }
       }
 
       if (game.winner && !game.settled) await settle(game)
-      return send(res, 200, view(game, me))
+      return send(res, 200, view(game, me, await getWins(me.playerId)))
     }
 
     return send(res, 404, { error: "not_found" })

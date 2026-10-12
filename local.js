@@ -22,6 +22,8 @@ process.env.VATAR_ORIGIN = `http://localhost:${PORT}`
 process.env.VATAR_SECRET = "vtr_local_secret"
 process.env.VATAR_RESULTS_SECRET = "vtr_local_results"
 process.env.VATAR_WEBHOOK_SECRET = "vtr_local_webhook"
+process.env.UPSTASH_REDIS_REST_URL = `http://localhost:${PORT}/local-db`
+process.env.UPSTASH_REDIS_REST_TOKEN = "local_db_token"
 await import("./server.js")
 
 // ---- Memory ----
@@ -29,6 +31,24 @@ const players = new Map()     // player id -> name
 const matches = new Map()     // match id -> { id, code, status, players, nonce, mode, quick }
 const purchases = new Map()   // purchase id -> { id, playerId, productId, status, delivered }
 const scores = new Map()      // player id -> best score
+const store = new Map()       // the pretend database: key -> string, Map (hash) or Set
+
+// ---- A pretend Upstash database: just the commands server.js uses ----
+function database([cmd, key, ...args]) {
+  const hash = () => store.get(key) || store.set(key, new Map()).get(key)
+  const set = () => store.get(key) || store.set(key, new Set()).get(key)
+  switch (String(cmd).toUpperCase()) {
+    case "GET": return store.get(key) ?? null
+    case "SET": store.set(key, String(args[0])); return "OK"
+    case "HGET": return hash().get(String(args[0])) ?? null
+    case "HINCRBY": { const n = Number(hash().get(String(args[0])) || 0) + Number(args[1]); hash().set(String(args[0]), String(n)); return n }
+    case "SADD": { const had = set().has(String(args[0])); set().add(String(args[0])); return had ? 0 : 1 }
+    case "SREM": return set().delete(String(args[0])) ? 1 : 0
+    case "SISMEMBER": return set().has(String(args[0])) ? 1 : 0
+    case "SMEMBERS": return [...set()]
+    default: throw new Error("unknown command " + cmd)
+  }
+}
 
 const rand = (n) => crypto.randomBytes(n).toString("hex")
 const newCode = () => Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ"[crypto.randomInt(24)]).join("")
@@ -226,6 +246,10 @@ http.createServer(async (req, res) => {
     if (req.method === "POST" && url.startsWith("/local-sdk/")) {
       const out = sdk(url.slice("/local-sdk/".length), JSON.parse(raw))
       return send(res, out.error ? 400 : 200, out)
+    }
+    if (req.method === "POST" && url === "/local-db") {
+      if (req.headers.authorization !== `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}`) return send(res, 401, { error: "Unauthorized" })
+      try { return send(res, 200, { result: database(JSON.parse(raw)) }) } catch (e) { return send(res, 400, { error: e.message }) }
     }
     if (url.startsWith(API_PATH + "/")) {
       const [code, out] = api(req.method, url.slice(API_PATH.length), raw.toString(), req.headers)

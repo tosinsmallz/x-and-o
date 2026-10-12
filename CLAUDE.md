@@ -16,7 +16,10 @@ The owner (Tosin) is not a developer: explain steps in plain language, one at a 
 - Dashboard: https://lagoslife.app/developers/dashboard (game "X and O", studio "Studio47", status Draft/sandbox)
 - GitHub repo: tosinsmallz/x-and-o (branch main). Render auto-deploys from it.
 - Hosting: Render free web service, https://x-and-o-u492.onrender.com
-- Secrets are Render environment variables: VATAR_SECRET, VATAR_RESULTS_SECRET, VATAR_WEBHOOK_SECRET. Never put them in files or chat.
+- Secrets are Render environment variables: VATAR_SECRET, VATAR_RESULTS_SECRET, VATAR_WEBHOOK_SECRET,
+  UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN. Never put them in files or chat.
+- Database: Upstash Redis (free), called over its REST API with fetch, so still no packages. Without the two UPSTASH
+  variables the server falls back to memory only and says so in the log. local.js includes a pretend Upstash.
 
 ## Status (11 Oct 2026)
 Working in the real sandbox: SDK init, test purchase, server-side purchase verify, mark delivered.
@@ -28,7 +31,8 @@ If a failed result ever happens again, server.js logs a "settle check:" line wit
 unsettled results every 30 seconds. While a result is unsettled, Lagos Life answers match calls with error `busy`.
 
 ## Known gaps before submitting for review
-- All state (games, wins, purchases) is in memory and is lost on restart: needs a database.
+- Database code is written and tested locally (wins, owned items, games, unsettled results survive restarts).
+  Still to do: create the Upstash database and add its two variables on Render; the log then says "database connected".
 - Free Render instances sleep when idle; review checks the game loads quickly on mobile data.
 - After "Back to lobby" while a match is still unsettled, new matches fail with `busy` until the server's retry succeeds.
 - Matches are friendlies only (`stake: 0`). Matches and stakes each need separate approval from the platform.
