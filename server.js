@@ -124,6 +124,7 @@ async function findGame(matchId) {
   if (saved) {
     const game = { ...JSON.parse(saved), settling: false }
     for (const id in game.seen) game.seen[id] = Date.now()   // don't let the test bot jump in right after a restart
+    await Promise.all(game.players.map((p) => owns(p.playerId, GOLD)))   // so both boards can show who has gold
     games.set(matchId, game)
     return game
   }
@@ -136,6 +137,7 @@ async function findGame(matchId) {
     board: Array(9).fill(null), turn: 0, winner: null, settled: false, settling: false,
     seen: Object.fromEntries(m.players.map((p) => [p.playerId, now])),
   }
+  await Promise.all(game.players.map((p) => owns(p.playerId, GOLD)))   // so both boards can show who has gold
   games.set(matchId, game)
   await saveGame(game)
   return game
@@ -200,6 +202,7 @@ function view(game, me, myWins) {
     you: MARKS[mine],
     turn: MARKS[game.turn],
     names: { X: game.players[0].name, O: game.players[1].name },
+    gold: { X: owned.get(game.players[0].playerId)?.has(GOLD) || false, O: owned.get(game.players[1].playerId)?.has(GOLD) || false },
     over: Boolean(game.winner),
     winner: game.winner === "draw" ? "draw" : winnerIdx >= 0 ? MARKS[winnerIdx] : null,
     settled: game.settled,

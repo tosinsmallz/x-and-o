@@ -26,7 +26,7 @@
   #board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 16px 0 }
   #board button { aspect-ratio: 1; margin: 0; padding: 0; font-size: 56px; font-weight: 800; background: #ffffff18 }
   #board button.O { color: #7fd6ff }
-  body.gold #board button { color: #f5c542; background: #f5c54222 }
+  #board button.gold { color: #f5c542; background: #f5c54222; text-shadow: 0 0 12px #f5c54288 }   /* both players see who owns gold */
   ol { text-align: left; padding-left: 28px; font-weight: 400 }
   #msg { min-height: 22px; color: #ffb4a8; font-weight: 400 }
 </style>
@@ -118,7 +118,7 @@
 
   function render(s) {
     last = s
-    ;[...$("board").children].forEach((b, i) => { b.textContent = s.board[i] || ""; b.className = s.board[i] || "" })
+    ;[...$("board").children].forEach((b, i) => { b.textContent = s.board[i] || ""; b.className = s.board[i] ? s.board[i] + (s.gold?.[s.board[i]] ? " gold" : "") : "" })
     const other = s.names[s.you === "X" ? "O" : "X"]
     if (!s.over) $("status").textContent = s.turn === s.you ? `Your turn (${s.you})` : `Waiting for ${other}…`
     else if (s.winner === "draw") $("status").textContent = "It's a draw 🤝🏾"
