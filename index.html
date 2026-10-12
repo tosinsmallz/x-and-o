@@ -78,7 +78,12 @@
     rate_limited: "Slow down a little and try again.",
     cancelled: "", owned: "You already own that.", signed_out: "Please sign in to Lagos Life first.",
   }
-  const fail = (e) => say(e && e.code in FRIENDLY ? FRIENDLY[e.code] : "Something went wrong. Try again.")
+  // Unknown errors show their code, so a screenshot is enough to know what went wrong.
+  const fail = (e) => {
+    const code = (e && (e.code || e.message)) || "unknown"
+    console.log("Vatar error:", e)
+    say(code in FRIENDLY ? FRIENDLY[code] : `Something went wrong (${code}). Try again.`)
+  }
 
   // Session tokens last 15 minutes and the SDK allows 10 requests a minute, so we reuse one for 10 minutes.
   async function session() {
