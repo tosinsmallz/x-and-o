@@ -33,7 +33,8 @@ unsettled results every 30 seconds. While a result is unsettled, Lagos Life answ
 ## Known gaps before submitting for review
 - Database: done (11 Oct 2026). Upstash Redis "x-and-o", free tier, us-west-2 (Oregon, same as Render).
   Render log shows "database connected". Wins, owned items, games and unsettled results survive restarts.
-- Free Render instances sleep when idle; review checks the game loads quickly on mobile data.
+- Keep-awake: done (11 Oct 2026). cron-job.org job "X and O keep awake" calls /health every 5 minutes so the free
+  Render instance never sleeps (one always-on free service fits in Render's 750 free hours a month).
 - After "Back to lobby" while a match is still unsettled, new matches fail with `busy` until the server's retry succeeds.
 - Matches are friendlies only (`stake: 0`). Matches and stakes each need separate approval from the platform.
 
